@@ -1,0 +1,369 @@
+// --
+// -- TestCop http://github.com/testcop
+// -- License http://github.com/testcop/license
+// -- Copyright 2019
+// --
+
+using System.Collections.Generic;
+using System.Linq;
+using JetBrains.Application.Settings;
+using JetBrains.DocumentModel;
+using JetBrains.ProjectModel;
+using JetBrains.ReSharper.Daemon;
+using JetBrains.ReSharper.Daemon.CSharp.Stages;
+using JetBrains.ReSharper.Feature.Services.Daemon;
+using JetBrains.ReSharper.Feature.Services.Util;
+using JetBrains.ReSharper.I18n.Services;
+using JetBrains.ReSharper.Psi;
+using JetBrains.ReSharper.Psi.CSharp.Tree;
+using JetBrains.ReSharper.Psi.ExtensionsAPI.Caches2;
+using JetBrains.ReSharper.Psi.Tree;
+using JetBrains.ReSharper.Psi.Util;
+using JetBrains.ReSharper.Psi.VB.Util;
+using JetBrains.Util;
+using TestCop.Plugin.Extensions;
+using TestCop.Plugin.Helper;
+using TestCop.Plugin.Highlighting;
+using IAttribute = JetBrains.ReSharper.Psi.CSharp.Tree.IAttribute;
+using IAttributesOwnerDeclaration = JetBrains.ReSharper.Psi.CSharp.Tree.IAttributesOwnerDeclaration;
+
+namespace TestCop.Plugin
+{
+    public class TestFileAnalysisElementProcessor : IRecursiveElementProcessor
+    {
+        private readonly IDaemonProcess _process;
+        private readonly IContextBoundSettingsStore _settings;
+        private readonly DefaultHighlightingConsumer _highlightingConsumer;
+
+        public IReadOnlyList<HighlightingInfo> Highlightings
+        {
+            get { return _highlightingConsumer.Highlightings.AsIReadOnlyList(); }
+        }
+
+        protected void AddHighlighting(DocumentRange range, IHighlighting highlighting)
+        {
+            _highlightingConsumer.AddHighlighting(highlighting, range);
+        }
+
+        public TestFileAnalysisElementProcessor(TestFileAnalysisDaemonStageProcess stageProcess, IDaemonProcess process, IContextBoundSettingsStore settings)
+        {            
+            _highlightingConsumer = new FilteringHighlightingConsumer(stageProcess.File.GetSourceFile(), stageProcess.File, settings);
+            _process = process;
+            _settings = settings;            
+        }
+
+        private ISolution Solution { get { return _process.Solution; } }
+        private IPsiSourceFile CurrentSourceFile { get { return _process.SourceFile; } }
+
+        private IList<string> TestAttributes
+        {
+            get
+            {
+                var testFileAnalysisSettings = _settings.GetKey<TestFileAnalysisSettings>(SettingsOptimization.OptimizeDefault);
+                var testingAttributes = testFileAnalysisSettings.TestingAttributes();
+                if (testingAttributes.Count == 0)
+                {
+                    testingAttributes.Add("TestFixture");
+                    testingAttributes.Add("TestClass");
+                    testingAttributes.Add("TestMethod");
+                }
+                return testingAttributes;
+            }
+        }
+      
+        private TestFileAnalysisSettings Settings
+        {
+            get { return _settings.GetKey<TestFileAnalysisSettings>(SettingsOptimization.OptimizeDefault); }
+        }
+
+        private IList<string> BDDPrefixes
+        {
+            get
+            {
+                var prefix = Settings.BddPrefixes();               
+                return prefix;
+            }
+        }
+              
+        public bool InteriorShouldBeProcessed(ITreeNode element)
+        {
+            return true;
+        }
+
+        public void ProcessBeforeInterior(ITreeNode element)
+        {
+        }
+
+        public void ProcessAfterInterior(ITreeNode element)
+        {                                     
+            var functionDeclaration = element as ICSharpFunctionDeclaration;
+            
+            if (functionDeclaration != null)
+            {
+                ProcessFunctionDeclaration(functionDeclaration);                
+            }
+            
+            var typeDeclaration = element as ICSharpTypeDeclaration;
+            if (typeDeclaration != null)
+            {
+                ProcessTypeDeclaration(typeDeclaration);                           
+            }
+        }
+        
+        private void ProcessTypeDeclaration(ICSharpTypeDeclaration declaration)
+        {
+            if (declaration.GetContainingNode<ICSharpTypeDeclaration>() != null)
+            {
+                return;//Dont instpect types already within a type
+            }
+            
+            var testingAttributes = FindTestingAttributes(declaration, TestAttributes);
+            if (testingAttributes.Count == 0)
+            {
+                /* type is missing attributes - lets check the body */
+                if (!CheckMethodsForTestingAttributes(declaration, TestAttributes)) return;
+            }
+            
+            //We have a testing attribute so now check some conformance.                       
+            CheckElementIsPublicAndCreateWarningIfNot(declaration, testingAttributes);
+            
+            if (CheckNamingOfTypeEndsWithTestSuffix(declaration))
+            {
+                if (CheckNamingOfFileAgainstTypeAndCreateWarningIfNot(declaration))
+                {
+                    CheckClassnameInFileNameActuallyExistsAndCreateWarningIfNot(declaration);
+                }
+            }
+
+        }
+        
+        private static bool CheckMethodsForTestingAttributes(ICSharpTypeDeclaration declaration, IList<string> testAttributes )
+        {
+            var sourceFile = declaration.GetSourceFile();
+            if (declaration.DeclaredElement == null) return false;
+            foreach (var m in declaration.DeclaredElement.Methods.SelectMany(m => m.GetDeclarationsIn(sourceFile)).OfType<IAttributesOwnerDeclaration>())
+            {
+                if (Enumerable.Any(FindTestingAttributes(m, testAttributes))) return true;                
+            }
+            return false;
+        }
+
+        static IList<IAttribute> FindTestingAttributes(IAttributesOwnerDeclaration element, IList<string> testAttributes)
+        {
+            var testingAttributes =
+                (from a in element.Attributes where testAttributes.Contains(a.Name.QualifiedName) select a).ToList();
+            return testingAttributes;
+        }
+
+        private void ProcessFunctionDeclaration(ICSharpFunctionDeclaration declaration)
+        {
+            // Nothing to calculate
+            if (declaration.Body == null) return;
+
+            var testingAttributes = FindTestingAttributes(declaration, TestAttributes);                
+            if (testingAttributes.Count==0) return;
+
+            CheckElementIsPublicAndCreateWarningIfNot(declaration, testingAttributes);
+            CheckTestMethodHasCodeAndCreateWarningIfNot(declaration);
+        }
+
+        public bool ProcessingIsFinished
+        {
+            get {  return _process.InterruptFlag; }
+        }
+
+        private bool CheckNamingOfTypeEndsWithTestSuffix(ICSharpTypeDeclaration declaration)
+        {
+            if (declaration.IsAbstract) return true;
+            
+            var declaredClassName = declaration.DeclaredName;
+            if (!declaredClassName.StartsWith(Enumerable.ToArray(BDDPrefixes)))
+            {
+                if (!declaredClassName.EndsWith(Settings.TestClassSuffixes()))
+                {
+                    var testingWarning = new TestClassNameSuffixWarning(Settings.TestClassSuffix, declaration);
+                    AddHighlighting(declaration.GetNameDocumentRange(), testingWarning);
+                    return false;
+
+                }
+            }
+            return true;
+        }
+
+        private bool CheckNamingOfFileAgainstTypeAndCreateWarningIfNot(ICSharpTypeDeclaration declaration)
+        {            
+            var declaredClassName = declaration.DeclaredName;
+            if (declaredClassName.StartsWith(Enumerable.ToArray(BDDPrefixes))) return false;
+
+            var currentFileName = CurrentSourceFile.GetLocation().NameWithoutExtension;
+
+            if (declaration.IsPartial && currentFileName.Contains("."))
+            {
+                currentFileName = currentFileName.Substring(0, currentFileName.LastIndexOf('.'));
+            }
+
+            var testClassNameFromFileName = currentFileName.Replace(".", "");
+
+            
+            if (testClassNameFromFileName != declaredClassName)
+            {
+                var testingWarning = new TestClassNameDoesNotMatchFileNameWarning( declaredClassName, testClassNameFromFileName, declaration);
+                AddHighlighting(declaration.GetNameDocumentRange(), testingWarning);
+                return false;
+            }
+
+            return true;
+        }
+        
+        private void CheckTestMethodHasCodeAndCreateWarningIfNot(ICSharpFunctionDeclaration declaration)
+        {
+            var statements = declaration.Body.Statements;
+            
+            if (!statements.Any())
+            {
+                IHighlighting highlighting = new TestMethodMissingCodeWarning(declaration, "Test method is empty");
+                AddHighlighting(declaration.GetNameDocumentRange(), highlighting);
+            }            
+        }
+
+        private void CheckElementIsPublicAndCreateWarningIfNot(IAccessRightsOwnerDeclaration declaration, IEnumerable<IAttribute> testingAttributes)
+        {
+            AccessRights accessRights = declaration.GetAccessRights();
+            if (accessRights == AccessRights.PUBLIC) return;
+            
+            foreach (var attribute in testingAttributes)
+            {
+                IHighlighting highlighting;                     
+                
+                if (declaration.DeclaredElement.IsClass())
+                {
+                    highlighting = new ClassShouldBePublicWarning(attribute.Name.QualifiedName, declaration);
+                }
+                else
+                {
+                    highlighting = new MethodShouldBePublicWarning(attribute.Name.QualifiedName, declaration);
+                }
+
+                AddHighlighting(declaration.GetNameDocumentRange(), highlighting);
+                return;
+            }
+        }
+  
+        private void CheckClassnameInFileNameActuallyExistsAndCreateWarningIfNot(ICSharpTypeDeclaration thisDeclaration)
+        {            
+            if (thisDeclaration.IsAbstract) return;
+            
+            var currentFileName = CurrentSourceFile.GetLocation().NameWithoutExtension;
+
+            var appropriateTestClassSuffixes = TestCopSettingsManager.Instance.Settings.GetAppropriateTestClassSuffixes(currentFileName);
+
+            foreach (var testClassSuffix in appropriateTestClassSuffixes)
+            {
+                var className =
+                    currentFileName.Split(new[] {'.'}, 2)[0].RemoveTrailing(testClassSuffix);
+
+                var declaredElements = ResharperHelper.FindClass(Solution, className);
+
+                var currentProject = thisDeclaration.GetProject();
+                var currentDeclarationNamespace = thisDeclaration.OwnerNamespaceDeclaration != null
+                    ? thisDeclaration.OwnerNamespaceDeclaration.DeclaredName
+                    : "";
+
+                var associatedProjects = currentProject.GetAssociatedProjects(CurrentSourceFile.ToProjectFile());
+                if (associatedProjects == null || associatedProjects.Count == 0)
+                {
+                    var highlight =
+                        new TestFileNameWarning(
+                            "Project for this test assembly was not found - check namespace of projects",
+                            thisDeclaration);
+                    AddHighlighting(thisDeclaration.GetNameDocumentRange(), highlight);
+                    return;
+                }
+
+                var filteredDeclaredElements = new List<IClrDeclaredElement>(declaredElements);
+                ResharperHelper.RemoveElementsNotInProjects(filteredDeclaredElements,
+                    associatedProjects.Select(p => p.Project).ToList());
+
+                if (filteredDeclaredElements.Count == 0)
+                {
+                    string message =
+                        string.Format(
+                            "The file name begins with {0} but no matching class exists in associated project",
+                            className);
+
+                    foreach (var declaredElement in declaredElements)
+                    {
+                        var cls = declaredElement as TypeElement;
+                        if (cls != null)
+                        {
+                            message += string.Format("\nHas it moved to {0}.{1} ?", cls.OwnerNamespaceDeclaration(),
+                                cls.GetClrName());
+                        }
+                    }
+
+                    var highlight = new TestFileNameWarning(message, thisDeclaration);
+                    AddHighlighting(thisDeclaration.GetNameDocumentRange(), highlight);
+
+                    return;
+                }
+
+                if (Settings.CheckTestNamespaces)
+                {
+                    CheckClassNamespaceOfTestMatchesClassUnderTest(thisDeclaration, declaredElements);
+                }
+            }
+        }
+
+        private void CheckClassNamespaceOfTestMatchesClassUnderTest(ICSharpTypeDeclaration thisDeclaration, List<IClrDeclaredElement> declaredElements)
+        {            
+            var thisProject = thisDeclaration.GetProject();
+            if (thisProject == null) return;
+
+            var associatedProject = thisProject.GetAssociatedProjects(CurrentSourceFile.ToProjectFile()).FirstOrDefault();
+
+            if (associatedProject == null) return;
+            ResharperHelper.RemoveElementsNotInProjects(declaredElements,new []{associatedProject.Project});   
+
+            var thisProjectsDefaultNamespace = thisProject.GetDefaultNamespace();
+            if (string.IsNullOrEmpty(thisProjectsDefaultNamespace)) return;
+
+            var associatedProjectsDefaultNameSpace = associatedProject.Project.GetDefaultNamespace();
+            if (string.IsNullOrEmpty(associatedProjectsDefaultNameSpace)) return;
+
+            //var nsToBeFoundShouldBe = associatedProject.Project.GetDefaultNamespace()+associatedProject.SubNamespace;
+            var nsToBeFoundShouldBe = associatedProject.FullNamespace();
+            
+            //Lookup the namespaces of the declaredElements we've found that possibly match this test             
+            IList<string> foundNameSpaces = new List<string>();
+            foreach (var declaredTestElement in declaredElements)
+            {                
+                var cls = declaredTestElement as TypeElement;
+                if (cls == null) continue;
+                var ns = cls.OwnerNamespaceDeclaration();
+
+                if (nsToBeFoundShouldBe == ns)
+                {
+                    return;//found a match !
+                }
+                foundNameSpaces.Add(ns);
+            }
+
+            foreach (var ns in foundNameSpaces)
+            {
+                if (ns.StartsWith(associatedProjectsDefaultNameSpace))
+                {
+                    //TODO: Review this can be probably be replaced with associatedProject method calls
+                    var targetsubNameSpace = ns.Substring(associatedProjectsDefaultNameSpace.Length).TrimStart(new[] { '.' });
+                    string suggestedNameSpace = thisProjectsDefaultNamespace.AppendIfNotNull(".", targetsubNameSpace );
+
+                    var targetFolder = thisProject.Location.Combine(targetsubNameSpace.Replace(".", @"\"));
+                                        
+                    var highlight = new TestFileNameSpaceWarning(CurrentSourceFile.ToProjectFile(), thisDeclaration, suggestedNameSpace
+                        , thisProject, targetFolder);
+                                                
+                    AddHighlighting(thisDeclaration.GetNameDocumentRange(), highlight);                   
+                }
+            }            
+        }         
+    }
+}

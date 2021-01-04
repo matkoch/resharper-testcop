@@ -1,0 +1,18 @@
+<Project>
+
+  <PropertyGroup>
+    <SdkVersion>2020.3.2</SdkVersion>
+
+    <Title>TestCop</Title>
+    <Description>Description</Description>
+
+    <Authors>Author</Authors>
+    <Copyright>Copyright $([System.DateTime]::Now.Year) Maintainers of TestCop</Copyright>
+    <PackageTags>resharper plugin</PackageTags>
+
+    <PackageProjectUrl></PackageProjectUrl>
+    <PackageLicenseUrl></PackageLicenseUrl>
+    <PackageIconUrl></PackageIconUrl>
+  </PropertyGroup>
+
+</Project>

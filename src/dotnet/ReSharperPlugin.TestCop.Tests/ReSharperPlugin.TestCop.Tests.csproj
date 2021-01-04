@@ -1,0 +1,22 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net461</TargetFramework>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="JetBrains.ReSharper.SDK.Tests" Version="$(SdkVersion)" />
+    <PackageReference Include="RhinoMocks" Version="3.6.1" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\ReSharperPlugin.TestCop\ReSharperPlugin.TestCop.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Remove="test/**/*" />
+    <None Include="test/**/*" />
+  </ItemGroup>
+
+</Project>

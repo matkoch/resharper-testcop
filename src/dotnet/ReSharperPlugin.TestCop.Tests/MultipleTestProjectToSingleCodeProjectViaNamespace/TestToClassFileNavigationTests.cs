@@ -1,0 +1,73 @@
+﻿// --
+// -- TestCop http://github.com/testcop
+// -- License http://github.com/testcop/license
+// -- Copyright 2014
+// --
+
+using System.IO;
+using JetBrains.Application.Settings;
+using JetBrains.Application.UI.ActionsRevised.Menu;
+using JetBrains.ReSharper.Feature.Services.Daemon;
+using JetBrains.ReSharper.Psi;
+using NUnit.Framework;
+
+namespace TestCop.Plugin.Tests.MultipleTestProjectToSingleCodeProjectViaNamespace
+{
+    [TestFixture]
+    public class TestToClassFileNavigationTests : CSharpHighlightingWithinSolutionTestBase
+    {
+        protected override bool HighlightingPredicate(IHighlighting highlighting, IPsiSourceFile sourceFile, IContextBoundSettingsStore settingsStore)
+        {
+            return highlighting.GetType().Namespace.Contains("TestCop");
+        }
+
+        protected override string RelativeTestDataPath
+        {
+            get { return @"MultipleTestProjectToSingleCodeProject\TestToClassNavigation"; }
+        }
+
+        protected override IExecutableAction GetShortcutAction(TextWriter textwriter)
+        {
+            IExecutableAction jumpToTestFileAction = TestCopJumpToTestFileAction.CreateWith(CreateJetPopMenuShowToWriterAction(textwriter));
+            return jumpToTestFileAction;
+        }
+        protected override string SolutionName
+        {
+            get { return @"TestApplication.sln"; }
+        }
+    
+        [Test]
+        [TestCase(@"<TestApplication2Tests>\ClassATests.cs")]
+        [TestCase(@"<TestApplication2Tests>\NS1\ClassForTestingPartialTests.cs")]
+        [TestCase(@"<TestApplication2Tests>\NS1\ClassForTestingPartialTests.partial.cs")]
+        [TestCase(@"<TestApplication2Tests>\NS1\ClassForTestingPartial.SecurityTests.partial.cs")]
+        [TestCase(@"<TestApplication2Tests>\NS2\ClassGTests.cs")]
+        [TestCase(@"<TestApplication2Tests>\Properties\AssemblyInfo.cs")]
+
+        [TestCase(@"<TestApplication2Tests>\NS1\NonNamespaceFolder\ClassDInNonNamespaceTests.cs")]
+        [TestCase(@"<TestApplication2Tests>\NonNamespaceFolder\ClassEInNonNamespaceTests.cs")]
+        public void Test(string testName)
+        {
+            const string altRegEx = "^(.*?)\\.?(Integration)*Tests$";
+
+            ExecuteWithinSettingsTransaction((settingsStore =>
+            {
+                RunGuarded(
+                    () =>
+                    {
+                        ClearRegExSettingsPriorToRun(settingsStore);
+
+                        settingsStore.SetValue<TestFileAnalysisSettings, bool>(
+                            s => s.FindOrphanedProjectFiles, true);
+                        settingsStore.SetValue<TestFileAnalysisSettings, string>(
+                            s => s.TestProjectToCodeProjectNameSpaceRegEx, altRegEx);
+                        settingsStore.SetValue<TestFileAnalysisSettings, string>(
+                            s => s.TestProjectToCodeProjectNameSpaceRegExReplace, "$1");
+                    }
+
+                    );
+                DoTestFiles(testName);
+            }));
+        }
+    }
+}
