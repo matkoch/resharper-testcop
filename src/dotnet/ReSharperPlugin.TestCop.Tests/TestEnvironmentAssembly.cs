@@ -8,9 +8,9 @@ using NUnit.Framework;
 [assembly: Apartment(ApartmentState.STA)]
 
 namespace TestCop.Plugin.Tests
-{    
+{
     [ZoneDefinition]
-    public interface ITestCopTestZone : ITestsEnvZone, IRequire<ITestCopZone>
+    public interface ITestCopTestZone : ITestsEnvZone, IRequire<PsiFeatureTestZone>
     {}
 
     [SetUpFixture]
@@ -18,6 +18,4 @@ namespace TestCop.Plugin.Tests
     {
     }
 
-    [ZoneMarker]
-    public class ZoneMarker : IRequire<ITestCopTestZone>, IRequire<ISinceClr4HostZone> { }
 }
