@@ -11,6 +11,8 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Reference Include="PresentationCore" />
+    <Reference Include="PresentationFramework" />
     <ProjectReference Include="..\ReSharperPlugin.TestCop\ReSharperPlugin.TestCop.csproj" />
   </ItemGroup>
 

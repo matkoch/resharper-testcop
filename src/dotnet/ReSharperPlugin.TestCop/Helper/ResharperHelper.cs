@@ -241,6 +241,7 @@ namespace TestCop.Plugin.Helper
             var shellLocks = solution.Locks;
             var tooltipManager = solution.GetComponent<ITooltipManager>();
 
+            // UPDATE MK
             var windowContextSource = context.GetData<PopupWindowContextSource>(UIDataConstants.PopupWindowContextSource)
                       ?? solution.GetComponent<IMainWindowPopupWindowContext>().Source;
 

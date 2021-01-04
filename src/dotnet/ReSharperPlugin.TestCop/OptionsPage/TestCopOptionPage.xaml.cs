@@ -18,7 +18,7 @@ using JetBrains;
 using JetBrains.Annotations;
 using JetBrains.Application.Icons;
 using JetBrains.Application.Settings;
-using JetBrains.Application.UI.Components.UIApplication;
+using JetBrains.Application.UI.Components;
 using JetBrains.Application.UI.Options;
 using JetBrains.Application.UI.Options.OptionPages;
 using JetBrains.Application.UI.UIAutomation;
@@ -51,14 +51,15 @@ namespace TestCop.Plugin.OptionsPage
       private readonly TemplateScopeManager _scopeManager;
       private readonly StoredTemplatesProvider _storedTemplatesProvider;
       private readonly ILiveTemplatesUIHelper _templatesUiHelper;
-      private readonly UIApplication _application;
+      // UPDATE MK
+      private readonly IUIApplication _application;
       private readonly ISolution _solution;
       private const string PID = "TestCopPageId";
       private readonly FileTemplatesManager _fileTemplatesManager;
       private readonly ILogger _logger;
       
       public TestCopOptionPage(Lifetime lifetime, OptionsSettingsSmartContext settings, TemplateScopeManager scopeManager
-          , IThemedIconManager iconManager, UIApplication application
+          , IThemedIconManager iconManager, IUIApplication application
         , StoredTemplatesProvider storedTemplatesProvider, ILiveTemplatesUIHelper templatesUiHelper, FileTemplatesManager fileTemplatesManager, ISolution solution = null)
       {
           _lifetime = lifetime;
@@ -431,15 +432,10 @@ namespace TestCop.Plugin.OptionsPage
             var scope = _scopeManager.EnumerateRealScopePoints(new TemplateAcceptanceContext(new ProjectFolderWithLocation(project)));            
             scope = scope.Distinct().Where(s => s is InLanguageSpecificProject).ToList();
 
-
-          var template = _templatesUiHelper.ChooseTemplate(
-              FileTemplatesManager.Instance.QuickListSupports, scope, project.ToDataContext(),
-              TemplateApplicability.File);
-                                                                                                                                        
-            if (template != null)
-            {
-                ((TextBox) sender).Text = template.Description;
-            }          
+            // UPDATE MK
+            _templatesUiHelper.ChooseTemplate(
+                FileTemplatesManager.Instance.QuickListSupports, scope, project.ToDataContext(),
+                TemplateApplicability.File, template => { ((TextBox) sender).Text = template.Description; });
       }
       
       private void ResetButton_OnClick(object sender, RoutedEventArgs e)

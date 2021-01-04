@@ -92,6 +92,7 @@ namespace TestCop.Plugin.Helper
 
             if (windowContextSource != null)
             {
+                // UPDATE MK
                 menu.PopupWindowContextSource = windowContextSource;
             }
         }
